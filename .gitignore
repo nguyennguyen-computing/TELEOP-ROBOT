@@ -8,9 +8,6 @@ dist/
 build/
 */build/
 
-# Backend (exclude entire backend folder)
-backend/
-
 # Coverage reports
 coverage/
 */coverage/
@@ -26,17 +23,11 @@ tmp/
 # Data files
 data/
 
-# Config files (if sensitive)
-config/
-
 # Documentation
 docs/
 
 # Examples
 examples/
-
-# Tests
-tests/
 
 # Tools
 tools/
