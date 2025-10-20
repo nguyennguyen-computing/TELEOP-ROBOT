@@ -59,8 +59,8 @@ db.createCollection('vel_logs', {
         },
         source: {
           bsonType: 'string',
-          enum: ['web'],
-          description: 'Source must be "web"'
+          enum: ['web', 'websocket', 'api'],
+          description: 'Source must be "web", "websocket", or "api"'
         }
       },
       additionalProperties: true

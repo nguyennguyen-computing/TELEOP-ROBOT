@@ -1,0 +1,16 @@
+# Full requirements including Zenoh
+# Note: Zenoh may need to be installed separately or from source
+
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic[settings]==2.5.0
+python-dotenv==1.0.0
+httpx==0.25.2
+pytest==7.4.3
+pytest-asyncio==0.21.1
+PyJWT==2.8.0
+
+# Zenoh - may need special installation
+# See: https://github.com/eclipse-zenoh/zenoh-python
+# Install with: pip install eclipse-zenoh
+eclipse-zenoh>=0.10.0

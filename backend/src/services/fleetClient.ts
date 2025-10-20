@@ -206,7 +206,7 @@ export class FleetClient {
           requestStartTime: startTime
         } as any;
 
-        const response = await this.httpClient.post<FleetVelocityResponse>('/fleet/vel', payload, config);
+        const response = await this.httpClient.post<FleetVelocityResponse>('/api/v1/fleet/vel', payload, config);
         
         // Record success
         this.recordSuccess();

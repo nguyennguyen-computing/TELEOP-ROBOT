@@ -68,7 +68,7 @@ export interface VelocityLogEntry {
 
 // WebSocket message types
 export interface WebSocketMessage {
-  type: 'set_vel' | 'connection_status' | 'error' | 'velocity_update';
+  type: 'set_vel' | 'connection_status' | 'error' | 'velocity_update' | 'ping' | 'pong';
   data: any;
   timestamp: string;
 }

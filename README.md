@@ -171,3 +171,4 @@ All API responses follow this format:
   "timestamp": "2025-10-18T15:14:19.461Z"
 }
 ```
+

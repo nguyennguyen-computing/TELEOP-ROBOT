@@ -1,13 +1,19 @@
+/**
+ * WebSocket server setup for real-time communication
+ * Requirements: 2.1, 2.4, 2.5
+ */
+
 import { WebSocketServer, WebSocket } from 'ws';
-import { 
-  WebSocketMessage, 
-  ConnectionStatusMessage, 
-  SetVelMessage, 
-  VelocityCommand 
+import {
+  WebSocketMessage,
+  ConnectionStatusMessage,
+  SetVelMessage,
+  VelocityCommand
 } from '@web-teleop-robot/shared';
 import { logEvent } from '../middleware/requestLogger';
 import { velocityProcessor } from '../services/velocityProcessor';
 import { createDatabaseService } from '../database/models';
+import { FleetVelocityResponse } from '../services';
 
 // Store active WebSocket connections with metadata
 interface WebSocketConnection {
@@ -23,7 +29,6 @@ const activeConnections = new Map<WebSocket, WebSocketConnection>();
 
 // Heartbeat configuration
 const HEARTBEAT_INTERVAL = 30000; // 30 seconds
-const HEARTBEAT_TIMEOUT = 10000;  // 10 seconds timeout for pong response
 
 /**
  * Sets up WebSocket server with connection handling and heartbeat
@@ -34,7 +39,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
     const clientIp = req.socket.remoteAddress || 'unknown';
     const connectionId = generateConnectionId();
     const now = new Date();
-    
+
     // Create connection metadata
     const connection: WebSocketConnection = {
       ws,
@@ -47,7 +52,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
 
     // Add to active connections
     activeConnections.set(ws, connection);
-    
+
     logEvent('websocket_connection', {
       connectionId,
       clientIp,
@@ -59,7 +64,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
 
     // Set up heartbeat for this connection
     ws.isAlive = true;
-    
+
     // Handle pong responses (heartbeat)
     ws.on('pong', () => {
       const conn = activeConnections.get(ws);
@@ -88,7 +93,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
           data: { message: 'Invalid message format' },
           timestamp: new Date().toISOString(),
         };
-        
+
         sendMessage(ws, errorMessage);
       }
     });
@@ -96,7 +101,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
     // Handle connection close
     ws.on('close', (code: number, reason: Buffer) => {
       activeConnections.delete(ws);
-      
+
       logEvent('websocket_disconnection', {
         connectionId,
         clientIp,
@@ -166,8 +171,8 @@ export function setupWebSocket(wss: WebSocketServer): void {
  * @param connection Connection metadata
  */
 async function handleWebSocketMessage(
-  ws: WebSocket, 
-  message: WebSocketMessage, 
+  ws: WebSocket,
+  message: WebSocketMessage,
   connection: WebSocketConnection
 ): Promise<void> {
   logEvent('websocket_message_received', {
@@ -184,6 +189,36 @@ async function handleWebSocketMessage(
     case 'connection_status':
       // Client requesting connection status
       sendConnectionStatus(ws, connection);
+      break;
+
+    case 'ping':
+      // Handle ping from client, send pong back
+      const originalTimestamp = message.data?.timestamp || Date.now()
+      const pongMessage: WebSocketMessage = {
+        type: 'pong',
+        data: {
+          timestamp: originalTimestamp, // Return original timestamp for latency calculation
+          serverTime: Date.now() // Add server time for debugging
+        },
+        timestamp: new Date().toISOString(),
+      };
+      sendMessage(ws, pongMessage);
+
+      // Update connection heartbeat
+      connection.lastPing = new Date();
+      connection.isAlive = true;
+
+      logEvent('websocket_ping_received', {
+        connectionId: connection.id,
+        clientTimestamp: originalTimestamp,
+        serverTime: Date.now()
+      });
+      break;
+
+    case 'pong':
+      // Handle pong from client (response to our ping)
+      connection.lastPing = new Date();
+      connection.isAlive = true;
       break;
 
     default:
@@ -207,8 +242,8 @@ async function handleWebSocketMessage(
  * Requirements: 2.1 - WebSocket communication for velocity commands
  */
 async function handleSetVelMessage(
-  ws: WebSocket, 
-  message: SetVelMessage, 
+  ws: WebSocket,
+  message: SetVelMessage,
   connection: WebSocketConnection
 ): Promise<void> {
   try {
@@ -226,11 +261,11 @@ async function handleSetVelMessage(
     });
 
     // Validate the velocity command
-    const validation = velocityProcessor.validateCommand(velocityCommand);
+    const validation = velocityProcessor().validateCommand(velocityCommand);
     if (!validation.isValid) {
       const errorResponse: WebSocketMessage = {
         type: 'error',
-        data: { 
+        data: {
           message: `Velocity validation failed: ${validation.errors.join(', ')}`,
           errors: validation.errors
         },
@@ -238,12 +273,12 @@ async function handleSetVelMessage(
       };
 
       sendMessage(ws, errorResponse);
-      
+
       logEvent('websocket_set_vel_validation_failed', {
         connectionId: connection.id,
         errors: validation.errors,
       }, 'warn');
-      
+
       return;
     }
 
@@ -252,9 +287,9 @@ async function handleSetVelMessage(
       const dbService = await createDatabaseService();
       const velocityLogModel = dbService.getVelocityLogModel();
       await velocityLogModel.insertLog(
-        velocityCommand.vx, 
-        velocityCommand.vy, 
-        velocityCommand.levels, 
+        velocityCommand.vx,
+        velocityCommand.vy,
+        velocityCommand.levels,
         'websocket'
       );
     } catch (dbError) {
@@ -265,15 +300,49 @@ async function handleSetVelMessage(
       // Continue processing even if logging fails
     }
 
-    // Send success response to the sender
+    // Forward command to fleet server
+    // Requirement 4.1: Forward command to FastAPI fleet-server
+    let fleetResponse: FleetVelocityResponse | undefined;
+    let fleetError: string | undefined;
+
+    try {
+      const { fleetClient } = await import('../services/fleetClient');
+      fleetResponse = await fleetClient.sendVelocityCommand(velocityCommand);
+      console.log('Successfully forwarded WebSocket command to fleet server:', fleetResponse);
+
+      logEvent('websocket_fleet_forward_success', {
+        connectionId: connection.id,
+        vx: velocityCommand.vx,
+        vy: velocityCommand.vy,
+        fleetResponse: fleetResponse
+      });
+    } catch (fleetErr) {
+      fleetError = fleetErr instanceof Error ? fleetErr.message : 'Fleet server communication failed';
+      console.error('Failed to forward WebSocket command to fleet server:', fleetError);
+
+      logEvent('websocket_fleet_forward_error', {
+        connectionId: connection.id,
+        vx: velocityCommand.vx,
+        vy: velocityCommand.vy,
+        error: fleetError
+      }, 'error');
+
+      // Don't fail the entire WebSocket request if fleet forwarding fails
+      // The command is still logged and broadcast to WebSocket clients
+    }
+
+    // Send success response to the sender (after fleet forwarding attempt)
     const successResponse: WebSocketMessage = {
       type: 'set_vel',
       data: {
         success: true,
+        published: fleetResponse?.published || false,
         vx: velocityCommand.vx,
         vy: velocityCommand.vy,
         levels: velocityCommand.levels,
-        timestamp: velocityCommand.timestamp?.toISOString()
+        timestamp: velocityCommand.timestamp?.toISOString(),
+        fleetStatus: fleetError ? 'error' : 'success',
+        fleetError: fleetError
       },
       timestamp: new Date().toISOString(),
     };
@@ -299,9 +368,9 @@ async function handleSetVelMessage(
       vx: velocityCommand.vx,
       vy: velocityCommand.vy,
       broadcastToClients: activeConnections.size - 1,
+      fleetStatus: fleetError ? 'error' : 'success',
+      fleetError: fleetError
     });
-
-    // TODO: Forward command to fleet server (will be implemented in task 3.5)
 
   } catch (error) {
     logEvent('websocket_set_vel_error', {
@@ -416,31 +485,49 @@ function performHeartbeatCheck(): void {
   const deadConnections: WebSocket[] = [];
 
   activeConnections.forEach((connection, ws) => {
-    if (!connection.isAlive) {
-      // Connection didn't respond to previous ping
-      deadConnections.push(ws);
-      return;
-    }
-
-    // Check if connection is stale (no pong response within timeout)
+    // Check if connection is stale (no activity within extended timeout)
     const timeSinceLastPing = now.getTime() - connection.lastPing.getTime();
-    if (timeSinceLastPing > HEARTBEAT_TIMEOUT) {
+
+    // Use longer timeout for server-side check (60 seconds)
+    // This gives client time to send its own pings
+    if (timeSinceLastPing > 60000) {
+      logEvent('websocket_connection_stale', {
+        connectionId: connection.id,
+        timeSinceLastPing,
+        lastPing: connection.lastPing.toISOString()
+      }, 'warn');
+
       deadConnections.push(ws);
       return;
     }
 
-    // Mark as not alive and send ping
-    connection.isAlive = false;
-    ws.isAlive = false;
-    
-    try {
-      ws.ping();
-    } catch (error) {
-      logEvent('websocket_ping_error', {
-        connectionId: connection.id,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      }, 'error');
-      deadConnections.push(ws);
+    // Only send server ping if we haven't heard from client in a while
+    // and we haven't marked it as not alive yet
+    if (timeSinceLastPing > 45000 && connection.isAlive) {
+      // Mark as not alive and send ping
+      connection.isAlive = false;
+      ws.isAlive = false;
+
+      try {
+        // Send ping message instead of WebSocket ping frame
+        const pingMessage: WebSocketMessage = {
+          type: 'ping',
+          data: { timestamp: Date.now() },
+          timestamp: new Date().toISOString(),
+        };
+        sendMessage(ws, pingMessage);
+
+        logEvent('websocket_server_ping_sent', {
+          connectionId: connection.id,
+          timeSinceLastPing
+        });
+      } catch (error) {
+        logEvent('websocket_ping_error', {
+          connectionId: connection.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        }, 'error');
+        deadConnections.push(ws);
+      }
     }
   });
 
@@ -452,9 +539,10 @@ function performHeartbeatCheck(): void {
         connectionId: connection.id,
         clientIp: connection.clientIp,
         connectedDuration: now.getTime() - connection.connectedAt.getTime(),
+        reason: 'No activity for 60+ seconds'
       });
     }
-    
+
     ws.terminate();
     activeConnections.delete(ws);
   });

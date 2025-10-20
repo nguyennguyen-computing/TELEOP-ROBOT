@@ -208,9 +208,19 @@ export class VelocityProcessor {
 }
 
 /**
- * Singleton instance of the velocity processor
+ * Singleton instance of the velocity processor (lazy loaded)
  */
-export const velocityProcessor = new VelocityProcessor();
+let _velocityProcessor: VelocityProcessor | null = null;
+
+export function getVelocityProcessor(): VelocityProcessor {
+  if (!_velocityProcessor) {
+    _velocityProcessor = new VelocityProcessor();
+  }
+  return _velocityProcessor;
+}
+
+// Export the getter function instead of the instance
+export { getVelocityProcessor as velocityProcessor };
 
 /**
  * Utility functions for common velocity operations

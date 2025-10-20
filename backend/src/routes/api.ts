@@ -214,7 +214,7 @@ export function createApiRoutes(): Router {
       };
 
       // Validate the velocity command
-      const validation = velocityProcessor.validateCommand(command);
+      const validation = velocityProcessor().validateCommand(command);
       if (!validation.isValid) {
         return res.status(400).json({
           ok: false,

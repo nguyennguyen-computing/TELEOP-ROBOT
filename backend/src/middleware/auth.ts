@@ -134,8 +134,15 @@ export class AuthService {
   }
 }
 
-// Singleton instance
-const authService = new AuthService();
+// Singleton instance (lazy loaded)
+let _authService: AuthService | null = null;
+
+function getAuthService(): AuthService {
+  if (!_authService) {
+    _authService = new AuthService();
+  }
+  return _authService;
+}
 
 /**
  * Authentication middleware that validates API keys or JWT tokens
@@ -145,14 +152,14 @@ const authService = new AuthService();
 export function requireAuth(scopes: string[] = []) {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     // Skip authentication if disabled
-    if (!authService.isAuthEnabled()) {
+    if (!getAuthService().isAuthEnabled()) {
       return next();
     }
 
-    const auth = authService.extractAuth(req);
+    const auth = getAuthService().extractAuth(req);
     
     // Check API key authentication
-    if (auth.apiKey && authService.validateApiKey(auth.apiKey)) {
+    if (auth.apiKey && getAuthService().validateApiKey(auth.apiKey)) {
       req.auth = auth;
       return next();
     }
@@ -222,8 +229,8 @@ export function createRateLimit(keyGenerator?: (req: Request) => string) {
  * Middleware to add authentication context to request
  */
 export function addAuthContext(req: AuthenticatedRequest, _res: Response, next: NextFunction) {
-  if (authService.isAuthEnabled()) {
-    req.auth = authService.extractAuth(req);
+  if (getAuthService().isAuthEnabled()) {
+    req.auth = getAuthService().extractAuth(req);
   }
   next();
 }
