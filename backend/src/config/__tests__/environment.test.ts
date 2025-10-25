@@ -45,7 +45,7 @@ describe('Environment Configuration', () => {
         VX_MAX: 1.0,
         VY_MAX: 1.0,
         ZENOH_LOCATOR: 'tcp/localhost:7447',
-        Z_KEY_CMD_VEL: 'rt/ros2/cmd_vel',
+        Z_KEY_CMD_VEL: 'cmd_vel',
       });
     });
 

@@ -1,0 +1,51 @@
+FROM node:20-alpine
+
+# Install system dependencies
+RUN apk add --no-cache libc6-compat
+
+# Install TypeScript globally to ensure it's available
+RUN npm install -g typescript
+
+WORKDIR /app
+
+# Copy all source files
+COPY . .
+
+# Build arguments for Next.js public environment variables
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_WS_URL
+ARG NEXT_PUBLIC_AUTH_ENABLED
+ARG NEXT_PUBLIC_VX_MAX
+ARG NEXT_PUBLIC_VY_MAX
+
+# Set environment variables
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_OPTIONS="--max-old-space-size=4096"
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
+ENV NEXT_PUBLIC_AUTH_ENABLED=$NEXT_PUBLIC_AUTH_ENABLED
+ENV NEXT_PUBLIC_VX_MAX=$NEXT_PUBLIC_VX_MAX
+ENV NEXT_PUBLIC_VY_MAX=$NEXT_PUBLIC_VY_MAX
+
+# Install dependencies for all workspaces
+RUN npm install
+
+# Build shared package
+RUN cd shared && npm run build
+
+# Build frontend
+RUN cd frontend && npm run build
+
+# Change to frontend directory
+WORKDIR /app/frontend
+
+# Create user
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+RUN chown -R nextjs:nodejs /app
+
+USER nextjs
+
+EXPOSE 3000
+
+CMD ["npm", "start"]

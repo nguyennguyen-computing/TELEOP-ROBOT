@@ -44,10 +44,6 @@ export class VelocityLogModel {
     }
   }
 
-  /**
-   * Query velocity logs with pagination and filtering
-   * Requirement 3.4: Support retrieving latest records with optional limit
-   */
   async getLogs(options: {
     limit?: number;
     skip?: number;
@@ -198,10 +194,6 @@ export class VelocityLogModel {
     };
   }
 
-  /**
-   * Ensure indexes are created for optimal query performance
-   * Requirement 3.5: Create timestamp index { ts: -1 }
-   */
   async ensureIndexes(): Promise<void> {
     try {
       const indexes = [

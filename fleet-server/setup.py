@@ -53,8 +53,8 @@ VX_MAX=1.0
 VY_MAX=1.0
 
 # Zenoh Configuration
-ZENOH_LOCATOR=tcp/zenoh:7447
-Z_KEY_CMD_VEL=rt/ros2/cmd_vel
+ZENOH_LOCATOR=tcp/localhost:7447
+Z_KEY_CMD_VEL=cmd_vel
 
 # Authentication (disabled by default for development)
 AUTH_ENABLED=false

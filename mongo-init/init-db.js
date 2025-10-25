@@ -1,12 +1,6 @@
-// MongoDB initialization script for Web Teleop Robot system
-// Requirements: 3.2, 3.3, 3.5
-
 // Switch to the teleop database
 db = db.getSiblingDB('teleop_db');
 
-// Create vel_logs collection with proper schema validation
-// Requirement 3.2: Use database "teleop_db" and collection "vel_logs"
-// Requirement 3.3: Include fields: ts (ISODate), vx (Number), vy (Number), levels (Object), source ('web')
 db.createCollection('vel_logs', {
   validator: {
     $jsonSchema: {

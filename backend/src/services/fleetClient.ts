@@ -1,8 +1,3 @@
-/**
- * Fleet Server HTTP Client
- * Requirements: 4.1, 7.3 - Fleet server communication and API contracts
- */
-
 import axios, { AxiosInstance, AxiosError, AxiosRequestConfig } from 'axios';
 import { VelocityCommand } from '@web-teleop-robot/shared';
 import { getEnvironmentConfig } from '../config/environment';
@@ -132,6 +127,17 @@ export class FleetClient {
       ...circuitBreakerConfig
     };
 
+    // Prepare authentication headers
+    const authHeaders: Record<string, string> = {};
+    if (config.AUTH_ENABLED && config.API_KEYS) {
+      // Use the first API key for fleet communication
+      const apiKey = config.API_KEYS.split(',')[0].trim();
+      if (apiKey) {
+        authHeaders['Authorization'] = `ApiKey ${apiKey}`;
+        console.log('Fleet API authentication enabled with API key');
+      }
+    }
+
     // Create axios instance
     this.httpClient = axios.create({
       baseURL: fleetApiUrl,
@@ -139,7 +145,8 @@ export class FleetClient {
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'User-Agent': 'web-teleop-robot-backend/1.0.0'
+        'User-Agent': 'web-teleop-robot-backend/1.0.0',
+        ...authHeaders
       }
     });
 
@@ -188,8 +195,8 @@ export class FleetClient {
     }
 
     const payload: FleetVelocityRequest = {
-      vx: command.vx,
-      vy: command.vy,
+      vx: Number(command.vx.toFixed(1)),
+      vy: Number(command.vy.toFixed(1)),
       levels: command.levels
     };
 
@@ -206,6 +213,7 @@ export class FleetClient {
           requestStartTime: startTime
         } as any;
 
+        console.log('Sending velocity command to fleet server:', '/api/v1/fleet/vel');
         const response = await this.httpClient.post<FleetVelocityResponse>('/api/v1/fleet/vel', payload, config);
         
         // Record success

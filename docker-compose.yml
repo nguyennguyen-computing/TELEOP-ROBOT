@@ -1,106 +1,138 @@
-version: '3.8'
-
 services:
-  # Next.js Web Interface
   web:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile.simple
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+        - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
+        - NEXT_PUBLIC_AUTH_ENABLED=${NEXT_PUBLIC_AUTH_ENABLED}
+        - NEXT_PUBLIC_VX_MAX=${VX_MAX}
+        - NEXT_PUBLIC_VY_MAX=${VY_MAX}
     ports:
       - "${WEB_PORT:-3000}:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=${NODE_API_URL:-http://localhost:3001}
-      - NEXT_PUBLIC_WS_URL=${NODE_WS_URL:-ws://localhost:3001}
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
+      - NEXT_PUBLIC_AUTH_ENABLED=${NEXT_PUBLIC_AUTH_ENABLED}
+      - NEXT_PUBLIC_VX_MAX=${VX_MAX}
+      - NEXT_PUBLIC_VY_MAX=${VY_MAX}
     depends_on:
       - node-api
     networks:
-      - teleop-network
+      - teleop_net
 
-  # Node.js Backend API
   node-api:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
       - "${NODE_PORT:-3001}:3001"
     environment:
-      - PORT=3001
-      - MONGO_URI=${MONGO_URI:-mongodb://mongo:27017/teleop_db}
-      - FLEET_API_URL=${FLEET_API_URL:-http://fleet-api:8000}
-      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
-      - VX_MAX=${VX_MAX:-1.0}
-      - VY_MAX=${VY_MAX:-1.0}
+      - NODE_PORT=${NODE_PORT}
+      - MONGO_URI=${MONGO_URI}
+      - FLEET_API_URL=${FLEET_API_URL}
+      - CORS_ORIGIN=${CORS_ORIGIN}
+      - VX_MAX=${VX_MAX}
+      - VY_MAX=${VY_MAX}
+      - ZENOH_LOCATOR=${ZENOH_LOCATOR}
+      - Z_KEY_CMD_VEL=${Z_KEY_CMD_VEL}
+      - AUTH_ENABLED=${AUTH_ENABLED}
+      - API_KEYS=${API_KEYS}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
     depends_on:
       - mongo
       - fleet-api
     networks:
-      - teleop-network
+      - teleop_net
 
-  # FastAPI Fleet Server
   fleet-api:
     build:
-      context: ./fleet-server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: fleet-server/Dockerfile
     ports:
       - "${FLEET_PORT:-8000}:8000"
     environment:
-      - PORT=8000
-      - ZENOH_LOCATOR=${ZENOH_LOCATOR:-tcp/zenoh:7447}
-      - Z_KEY_CMD_VEL=${Z_KEY_CMD_VEL:-rt/ros2/cmd_vel}
-      - VX_MAX=${VX_MAX:-1.0}
-      - VY_MAX=${VY_MAX:-1.0}
+      - PORT=${FLEET_PORT}
+      - ZENOH_LOCATOR=${ZENOH_LOCATOR}
+      - Z_KEY_CMD_VEL=${Z_KEY_CMD_VEL}
+      - VX_MAX=${VX_MAX}
+      - VY_MAX=${VY_MAX}
+      - AUTH_ENABLED=${AUTH_ENABLED}
+      - API_KEYS=${API_KEYS}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
+      - LOG_LEVEL=${LOG_LEVEL}
     depends_on:
       - zenoh
     networks:
-      - teleop-network
+      - teleop_net
 
-  # MongoDB Database
   mongo:
     image: mongo:7
     ports:
       - "${MONGO_PORT:-27017}:27017"
     environment:
-      - MONGO_INITDB_DATABASE=teleop_db
+      - MONGO_INITDB_DATABASE=${MONGO_INITDB_DATABASE}
     volumes:
       - mongo_data:/data/db
-      - ./mongo-init:/docker-entrypoint-initdb.d
     networks:
-      - teleop-network
+      - teleop_net
 
-  # Zenoh Router
   zenoh:
     image: eclipse/zenoh:latest
+    command: ["-c", "/zenoh-config.json5"]
     ports:
       - "${ZENOH_PORT:-7447}:7447"
-    command: ["zenohd", "--cfg", "/zenoh-config.json5"]
+      - "${ZENOH_REST_PORT:-8080}:8080"
     volumes:
       - ./zenoh-config.json5:/zenoh-config.json5:ro
+    environment:
+      - RUST_LOG=${RUST_LOG}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/@/router/local"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
     networks:
-      - teleop-network
+      - teleop_net
 
-  # Zenoh to ROS2 Bridge
   bridge:
     image: eclipse/zenoh-bridge-ros2dds:latest
+    command: ["-c", "/zenoh-bridge-config.json5"]
+    volumes:
+      - ./zenoh-bridge-config.json5:/zenoh-bridge-config.json5:ro
+      - ./fastdds-config.xml:/fastdds-config.xml:ro
     environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
-      - ZENOH_ROUTER=${ZENOH_LOCATOR:-tcp/zenoh:7447}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}
+      - ROS_DISTRO=${ROS_DISTRO}
+      - ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY}
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION}
+      - FASTRTPS_DEFAULT_PROFILES_FILE=${FASTRTPS_DEFAULT_PROFILES_FILE}
+      - RUST_LOG=${RUST_LOG_BRIDGE}
     depends_on:
-      - zenoh
+      zenoh:
+        condition: service_healthy
+    restart: unless-stopped
     networks:
-      - teleop-network
-      - ros2-network
+      - teleop_net
 
-  # ROS2 Robot Node (Optional)
   robot:
     build:
-      context: ./robot
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: robot/Dockerfile
     environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}
+      - ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY}
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION}
+      - FASTRTPS_DEFAULT_PROFILES_FILE=${FASTRTPS_DEFAULT_PROFILES_FILE}
     depends_on:
       - bridge
     networks:
-      - ros2-network
+      - teleop_net
     profiles:
       - robot
 
@@ -108,7 +140,5 @@ volumes:
   mongo_data:
 
 networks:
-  teleop-network:
-    driver: bridge
-  ros2-network:
+  teleop_net:
     driver: bridge

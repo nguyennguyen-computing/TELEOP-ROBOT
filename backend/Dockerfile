@@ -1,43 +1,56 @@
-FROM node:20-alpine AS base
-
-# Install dependencies only when needed
-FROM base AS deps
-RUN apk add --no-cache libc6-compat
+# ===========================
+# 1️⃣ Build stage
+# ===========================
+FROM node:20-alpine AS builder
 WORKDIR /app
 
-# Copy shared package first
-COPY shared/package*.json ./shared/
-COPY shared/ ./shared/
-RUN cd shared && npm ci
-
-# Install dependencies
-COPY backend/package*.json ./
-RUN npm ci
-
-# Rebuild the source code only when needed
-FROM base AS builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/shared ./shared
-COPY backend/ ./
-
+# First, build shared package
+COPY shared ../shared
+WORKDIR /shared
+RUN npm install --legacy-peer-deps
 RUN npm run build
 
-# Production image
-FROM base AS runner
+# Now build backend
+WORKDIR /app
+COPY backend/package*.json ./
+COPY backend/tsconfig.json ./
+
+# Install all dependencies (including dev dependencies for build)
+RUN npm install --legacy-peer-deps
+
+# Copy source code
+COPY backend/src ./src
+
+# Build TypeScript to JavaScript
+RUN npm run build
+
+# ===========================
+# 2️⃣ Runtime image
+# ===========================
+FROM node:20-alpine AS runner
 WORKDIR /app
 
-ENV NODE_ENV production
+# Copy package files and install production dependencies only
+COPY backend/package*.json ./
+RUN npm install --omit=dev --legacy-peer-deps
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nodejs
+# Copy built code from builder stage
+COPY --from=builder /app/dist ./dist
 
-COPY --from=builder --chown=nodejs:nodejs /app/dist ./dist
-COPY --from=builder --chown=nodejs:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=nodejs:nodejs /app/package*.json ./
+# Copy built shared package from builder stage
+COPY --from=builder /shared ../shared
 
-USER nodejs
+# Set environment variables
+ENV NODE_ENV=production
+ENV NODE_PORT=3001
 
+# Create non-root user for safety
+RUN addgroup -S nodeapp && adduser -S nodeuser -G nodeapp
+RUN chown -R nodeuser:nodeapp /app
+USER nodeuser
+
+# Expose API port
 EXPOSE 3001
 
-CMD ["npm", "start"]
+# Start server
+CMD ["node", "dist/index.js"]

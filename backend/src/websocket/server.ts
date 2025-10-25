@@ -1,9 +1,6 @@
-/**
- * WebSocket server setup for real-time communication
- * Requirements: 2.1, 2.4, 2.5
- */
-
 import { WebSocketServer, WebSocket } from 'ws';
+import { IncomingMessage } from 'http';
+import { URL } from 'url';
 import {
   WebSocketMessage,
   ConnectionStatusMessage,
@@ -14,6 +11,7 @@ import { logEvent } from '../middleware/requestLogger';
 import { velocityProcessor } from '../services/velocityProcessor';
 import { createDatabaseService } from '../database/models';
 import { FleetVelocityResponse } from '../services';
+import { authService } from '../middleware/auth';
 
 // Store active WebSocket connections with metadata
 interface WebSocketConnection {
@@ -23,12 +21,70 @@ interface WebSocketConnection {
   connectedAt: Date;
   lastPing: Date;
   isAlive: boolean;
+  authenticated: boolean;
+  userId?: string | undefined;
+  scopes?: string[] | undefined;
 }
 
 const activeConnections = new Map<WebSocket, WebSocketConnection>();
 
 // Heartbeat configuration
 const HEARTBEAT_INTERVAL = 30000; // 30 seconds
+
+/**
+ * Authenticates WebSocket connection using query parameters
+ * @param req Incoming HTTP request
+ * @returns Authentication result
+ */
+function authenticateWebSocketConnection(req: IncomingMessage): {
+  authenticated: boolean;
+  userId?: string;
+  scopes?: string[];
+  error?: string;
+} {
+  // Skip authentication if disabled
+  if (!authService.isAuthEnabled()) {
+    return { authenticated: true };
+  }
+
+  try {
+    const url = new URL(req.url || '', `http://${req.headers.host}`);
+    const token = url.searchParams.get('token');
+    const apiKey = url.searchParams.get('apiKey');
+
+    // Try JWT token first
+    if (token) {
+      const payload = authService.validateJWT(token);
+      if (payload) {
+        return {
+          authenticated: true,
+          userId: payload.sub,
+          scopes: payload.scope || []
+        };
+      }
+      return { authenticated: false, error: 'Invalid JWT token' };
+    }
+
+    // Try API key
+    if (apiKey) {
+      if (authService.validateApiKey(apiKey)) {
+        return {
+          authenticated: true,
+          userId: 'api-key-user', // API key doesn't have specific user
+          scopes: ['robot:read', 'robot:control'] // Default scopes for API key
+        };
+      }
+      return { authenticated: false, error: 'Invalid API key' };
+    }
+
+    return { authenticated: false, error: 'No authentication provided' };
+  } catch (error) {
+    return {
+      authenticated: false,
+      error: error instanceof Error ? error.message : 'Authentication error'
+    };
+  }
+}
 
 /**
  * Sets up WebSocket server with connection handling and heartbeat
@@ -40,6 +96,31 @@ export function setupWebSocket(wss: WebSocketServer): void {
     const connectionId = generateConnectionId();
     const now = new Date();
 
+    // Authenticate connection
+    const authResult = authenticateWebSocketConnection(req);
+
+    if (!authResult.authenticated) {
+      logEvent('websocket_auth_failed', {
+        connectionId,
+        clientIp,
+        error: authResult.error,
+      }, 'warn');
+
+      // Send authentication error and close connection
+      const errorMessage: WebSocketMessage = {
+        type: 'error',
+        data: {
+          message: 'Authentication required',
+          error: authResult.error
+        },
+        timestamp: new Date().toISOString(),
+      };
+
+      ws.send(JSON.stringify(errorMessage));
+      ws.close(1008, 'Authentication required'); // Policy violation
+      return;
+    }
+
     // Create connection metadata
     const connection: WebSocketConnection = {
       ws,
@@ -47,7 +128,10 @@ export function setupWebSocket(wss: WebSocketServer): void {
       clientIp,
       connectedAt: now,
       lastPing: now,
-      isAlive: true
+      isAlive: true,
+      authenticated: authResult.authenticated,
+      userId: authResult.userId,
+      scopes: authResult.scopes
     };
 
     // Add to active connections
@@ -237,16 +321,34 @@ async function handleWebSocketMessage(
   }
 }
 
-/**
- * Handles set_vel WebSocket messages
- * Requirements: 2.1 - WebSocket communication for velocity commands
- */
 async function handleSetVelMessage(
   ws: WebSocket,
   message: SetVelMessage,
   connection: WebSocketConnection
 ): Promise<void> {
   try {
+    // Check authorization for robot control
+    if (!connection.authenticated || !connection.scopes?.includes('robot:control')) {
+      const errorResponse: WebSocketMessage = {
+        type: 'error',
+        data: {
+          message: 'Insufficient permissions. robot:control scope required.',
+          code: 'INSUFFICIENT_PERMISSIONS'
+        },
+        timestamp: new Date().toISOString(),
+      };
+
+      sendMessage(ws, errorResponse);
+
+      logEvent('websocket_set_vel_unauthorized', {
+        connectionId: connection.id,
+        userId: connection.userId,
+        scopes: connection.scopes,
+      }, 'warn');
+
+      return;
+    }
+
     const velocityCommand: VelocityCommand = {
       ...message.data,
       timestamp: new Date(),
@@ -255,13 +357,14 @@ async function handleSetVelMessage(
 
     logEvent('websocket_set_vel_received', {
       connectionId: connection.id,
+      userId: connection.userId,
       vx: velocityCommand.vx,
       vy: velocityCommand.vy,
       levels: velocityCommand.levels,
     });
 
     // Validate the velocity command
-    const validation = velocityProcessor().validateCommand(velocityCommand);
+    const validation = velocityProcessor.validateCommand(velocityCommand);
     if (!validation.isValid) {
       const errorResponse: WebSocketMessage = {
         type: 'error',
@@ -287,8 +390,8 @@ async function handleSetVelMessage(
       const dbService = await createDatabaseService();
       const velocityLogModel = dbService.getVelocityLogModel();
       await velocityLogModel.insertLog(
-        velocityCommand.vx,
-        velocityCommand.vy,
+        parseFloat(velocityCommand.vx.toFixed(1)),
+        parseFloat(velocityCommand.vy.toFixed(1)),
         velocityCommand.levels,
         'websocket'
       );
@@ -300,8 +403,6 @@ async function handleSetVelMessage(
       // Continue processing even if logging fails
     }
 
-    // Forward command to fleet server
-    // Requirement 4.1: Forward command to FastAPI fleet-server
     let fleetResponse: FleetVelocityResponse | undefined;
     let fleetError: string | undefined;
 
@@ -476,10 +577,6 @@ export function broadcastMessage(message: WebSocketMessage, excludeWs?: WebSocke
   });
 }
 
-/**
- * Performs heartbeat check on all connections
- * Requirements: 2.4, 2.5 - Connection monitoring and status indication
- */
 function performHeartbeatCheck(): void {
   const now = new Date();
   const deadConnections: WebSocket[] = [];

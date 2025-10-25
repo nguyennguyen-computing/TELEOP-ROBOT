@@ -86,8 +86,8 @@ class StatusResponse(BaseResponse):
                 "configuration": {
                     "vx_max": 1.0,
                     "vy_max": 1.0,
-                    "zenoh_locator": "tcp/zenoh:7447",
-                    "zenoh_key": "rt/ros2/cmd_vel",
+                    "zenoh_locator": "tcp/localhost:7447",
+                    "zenoh_key": "cmd_vel",
                     "auth_enabled": True,
                     "cors_origins": ["http://localhost:3000"]
                 },

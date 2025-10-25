@@ -1,3 +1,7 @@
+/**
+ * Environment configuration validation and parsing
+ */
+
 import type { EnvironmentConfig } from '@web-teleop-robot/shared';
 
 /**
@@ -17,16 +21,19 @@ export function validateEnvironment(): EnvironmentConfig {
     'Z_KEY_CMD_VEL',
   ];
 
+  // Authentication is optional - if enabled, JWT_SECRET is required
   const authEnabled = process.env.AUTH_ENABLED === 'true';
   if (authEnabled && !process.env.JWT_SECRET) {
     throw new Error('JWT_SECRET is required when AUTH_ENABLED is true');
   }
 
+  // Check for missing required environment variables
   const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
   if (missingVars.length > 0) {
     throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
   }
 
+  // Parse and validate numeric values
   const nodePort = parseInt(process.env.NODE_PORT!, 10);
   const webPort = parseInt(process.env.WEB_PORT || '3000', 10);
   const fleetPort = parseInt(process.env.FLEET_PORT || '8000', 10);
@@ -66,6 +73,7 @@ export function validateEnvironment(): EnvironmentConfig {
     throw new Error('CORS_ORIGIN must be a valid URL');
   }
 
+  // Parse authentication configuration
   const authEnabledConfig = process.env.AUTH_ENABLED === 'true';
   const apiKeysString = process.env.API_KEYS || '';
   const jwtSecret = process.env.JWT_SECRET || '';
@@ -73,6 +81,7 @@ export function validateEnvironment(): EnvironmentConfig {
   const rateLimitWindowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10); // 15 minutes
   const rateLimitMaxRequests = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10);
 
+  // Build configuration object
   const config: EnvironmentConfig = {
     WEB_PORT: webPort,
     NODE_PORT: nodePort,

@@ -4,7 +4,7 @@ import { velocityProcessor } from '../services/velocityProcessor';
 import { fleetClient } from '../services/fleetClient';
 import { createDatabaseService } from '../database/models';
 import { broadcastVelocityUpdate, getConnectionStats } from '../websocket/server';
-import { requireAuth, createRateLimit, addAuthContext } from '../middleware/auth';
+import { requireAuth, createRateLimit, addAuthContext, authService } from '../middleware/auth';
 
 /**
  * Request body interface for velocity endpoint
@@ -76,8 +76,7 @@ export function createApiRoutes(): Router {
 
       const userScopes = Array.isArray(scopes) ? scopes : ['robot:read', 'robot:control'];
 
-      // Import authService dynamically to avoid circular dependency
-      const { authService } = await import('../middleware/auth');
+      // Generate JWT token
       const token = authService.generateJWT(userId, userScopes);
 
       const response: ApiResponse = {
@@ -214,7 +213,7 @@ export function createApiRoutes(): Router {
       };
 
       // Validate the velocity command
-      const validation = velocityProcessor().validateCommand(command);
+      const validation = velocityProcessor.validateCommand(command);
       if (!validation.isValid) {
         return res.status(400).json({
           ok: false,
@@ -241,7 +240,6 @@ export function createApiRoutes(): Router {
         // Continue processing even if WebSocket broadcast fails
       }
 
-      // Forward command to fleet server
       let fleetResponse;
       let fleetError: string | undefined;
       
@@ -286,12 +284,6 @@ export function createApiRoutes(): Router {
     }
   });
 
-  /**
-   * GET /api/logs - Retrieve command history
-   * Requirement 3.4: Support retrieving latest records with optional limit parameter
-   * Requirement 7.5: Return appropriate error status codes with descriptive messages
-   * Requirements: 8.1, 8.2, 8.3 - Authentication required
-   */
   router.get('/logs', requireAuth(['robot:read']), async (req: AuthenticatedRequest, res) => {
     try {
       // Parse query parameters with defaults

@@ -19,7 +19,10 @@ import { validateEnvironment } from './config/environment';
 
 
 // Load environment variables
-dotenv.config();
+const dotenvResult = dotenv.config({ path: '.env' });
+console.log('Dotenv result:', dotenvResult);
+console.log('NODE_PORT from env:', process.env.NODE_PORT);
+console.log('AUTH_ENABLED from env:', process.env.AUTH_ENABLED);
 
 // Validate environment configuration
 const config = validateEnvironment();

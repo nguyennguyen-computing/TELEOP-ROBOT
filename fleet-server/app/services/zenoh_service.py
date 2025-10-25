@@ -1,9 +1,5 @@
 """
-Zenoh service for Fleet Server
-
-Provides Zenoh client functionality for publishing ROS2 Twist messages
-to the robot control system. Handles connection management, message
-serialization, and error recovery for reliable robot communication.
+Zenoh service for Fleet Server - Fixed for Bridge Communication
 """
 
 import json
@@ -16,13 +12,12 @@ from contextlib import asynccontextmanager
 from app.config import settings
 from app.core.exceptions import ZenohConnectionError
 
-# Try to import Zenoh, handle gracefully if not available
+# Try to import Zenoh
 try:
     import zenoh
     ZENOH_AVAILABLE = True
 except ImportError:
     try:
-        # Try alternative import path if needed
         from eclipse import zenoh
         ZENOH_AVAILABLE = True
     except ImportError:
@@ -41,21 +36,13 @@ class TwistMessage:
         self.angular = {"x": ax, "y": ay, "z": az}
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for JSON serialization"""
         return {
             "linear": self.linear,
             "angular": self.angular
         }
     
-    def to_json(self) -> str:
-        """Convert to JSON string"""
-        return json.dumps(self.to_dict())
-    
     @classmethod
     def from_velocity(cls, vx: float, vy: float) -> 'TwistMessage':
-        """Create Twist message from velocity components"""
-        # Following the coordinate system: Forward=+X, Right=+Y
-        # Angular Z is always 0 as specified in requirements
         return cls(vx=vx, vy=vy, vz=0.0, ax=0.0, ay=0.0, az=0.0)
 
 
@@ -64,61 +51,75 @@ class ZenohPublisher:
     
     def __init__(self):
         self.config = settings.get_zenoh_config()
-        self.session: Optional[Any] = None  # Use Any instead of zenoh.Session
+        self.session: Optional[Any] = None
         self.is_connected = False
         self.reconnect_attempts = 0
         self.last_publish_time: Optional[datetime] = None
         self.publish_count = 0
         self.zenoh_available = ZENOH_AVAILABLE
         
+        # CRITICAL FIX: Ensure topic key is in ROS2 format
+        self._fix_topic_key()
+        
         if not self.zenoh_available:
             logger.warning("Zenoh not available - running in mock mode")
-            logger.warning("To enable Zenoh: pip install eclipse-zenoh")
         else:
-            logger.info(f"ZenohPublisher initialized with locator: {self.config['locator']}")
+            logger.info(f"ZenohPublisher initialized")
+            logger.info(f"Zenoh locator: {self.config['locator']}")
             logger.info(f"Command velocity key: {self.config['cmd_vel_key']}")
+    
+    def _fix_topic_key(self):
+        """Ensure topic key is in correct ROS2 format"""
+        cmd_vel_key = self.config.get('cmd_vel_key', 'cmd_vel')
+        
+        # Remove leading/trailing slashes if any
+        cmd_vel_key = cmd_vel_key.strip('/')
+        
+        self.config['cmd_vel_key'] = cmd_vel_key
+        logger.info(f"Topic key normalized to: {cmd_vel_key}")
     
     async def connect(self) -> bool:
         """Connect to Zenoh router"""
         if not self.zenoh_available:
             logger.info("Zenoh not available - using mock connection")
-            self.is_connected = True  # Mock connection for development
+            self.is_connected = True
             return True
             
         try:
             logger.info(f"Connecting to Zenoh router at {self.config['locator']}")
             
-            # Create Zenoh session with proper configuration
-            # Try different configuration approaches for different Zenoh versions
-            try:
-                # Method 1: Try with Config object
-                zenoh_config = zenoh.Config()
-                zenoh_config.insert_json5("connect/endpoints", f'["{self.config["locator"]}"]')
-                self.session = zenoh.open(zenoh_config)
-            except Exception as e1:
-                logger.debug(f"Config method failed: {e1}, trying alternative...")
-                try:
-                    # Method 2: Try with simple string
-                    self.session = zenoh.open()
-                except Exception as e2:
-                    logger.debug(f"Simple open failed: {e2}, trying with dict...")
-                    # Method 3: Try with minimal config
-                    self.session = zenoh.open({})
+            # Parse locator
+            locator = self.config['locator']
+            
+            # Create Zenoh configuration
+            zenoh_config = zenoh.Config()
+            
+            # Set connection endpoint
+            endpoints = [locator] if not locator.startswith('[') else json.loads(locator)
+            zenoh_config.insert_json5("connect/endpoints", json.dumps(endpoints))
+            
+            # Set mode to client (important for connecting to router)
+            zenoh_config.insert_json5("mode", '"client"')
+            
+            # Open session
+            logger.info(f"Opening Zenoh session with config: {zenoh_config}")
+            self.session = zenoh.open(zenoh_config)
             
             if self.session:
                 self.is_connected = True
                 self.reconnect_attempts = 0
-                logger.info("Successfully connected to Zenoh router")
+                logger.info("✅ Successfully connected to Zenoh router")
+                logger.info(f"Session info: {type(self.session)}")
                 return True
             else:
-                logger.warning("Failed to create Zenoh session - continuing in mock mode")
-                self.is_connected = True  # Use mock mode
-                return True
+                logger.error("Failed to create Zenoh session")
+                return False
                 
         except Exception as e:
-            logger.warning(f"Failed to connect to Zenoh: {e} - continuing in mock mode")
-            self.is_connected = True  # Use mock mode for development
-            return True
+            logger.error(f"Failed to connect to Zenoh: {e}", exc_info=True)
+            # Don't fallback to mock mode in production
+            self.is_connected = False
+            return False
     
     async def disconnect(self):
         """Disconnect from Zenoh router"""
@@ -127,84 +128,94 @@ class ZenohPublisher:
                 self.session.close()
                 logger.info("Disconnected from Zenoh router")
             except Exception as e:
-                logger.error(f"Error during Zenoh disconnect: {e}")
+                logger.error(f"Error during disconnect: {e}")
             finally:
                 self.session = None
                 self.is_connected = False
     
-    async def reconnect(self) -> bool:
-        """Attempt to reconnect to Zenoh router"""
-        if self.reconnect_attempts >= self.config['max_reconnect_attempts']:
-            logger.error(f"Max reconnection attempts ({self.config['max_reconnect_attempts']}) reached")
-            return False
+    def _create_twist_cdr(self, vx: float, vy: float) -> bytes:
+        """
+        Create CDR (Common Data Representation) binary for geometry_msgs/Twist
         
-        self.reconnect_attempts += 1
-        logger.info(f"Reconnection attempt {self.reconnect_attempts}/{self.config['max_reconnect_attempts']}")
+        Twist message structure:
+        - geometry_msgs/Vector3 linear  (x, y, z as float64)
+        - geometry_msgs/Vector3 angular (x, y, z as float64)
         
-        # Disconnect first if still connected
-        if self.session:
-            await self.disconnect()
+        CDR encapsulation format:
+        - 4 bytes header: [0x00, 0x01, 0x00, 0x00] (little endian, CDRv1)
+        - 48 bytes data: 6 x float64 (8 bytes each)
+        """
+        import struct
         
-        # Wait before reconnecting
-        await asyncio.sleep(self.config['reconnect_interval'])
+        # Round to reasonable precision
+        vx_val = round(float(vx), 3)
+        vy_val = round(float(vy), 3)
         
-        return await self.connect()
-    
-    async def ensure_connected(self) -> bool:
-        """Ensure connection is established, reconnect if necessary"""
-        if self.is_connected:
-            return True
+        logger.debug(f"Creating CDR for vx={vx_val}, vy={vy_val}")
         
-        if not self.zenoh_available:
-            logger.debug("Zenoh not available - using mock mode")
-            self.is_connected = True
-            return True
+        # CDR encapsulation header
+        # Byte 0: Endianness (0x00 = big endian, 0x01 = little endian)
+        # Byte 1: Encapsulation kind (0x00 = CDR_BE, 0x01 = CDR_LE)
+        cdr_header = bytes([0x00, 0x01, 0x00, 0x00])
         
-        logger.warning("Zenoh connection lost, attempting to reconnect")
-        return await self.reconnect()
-    
-    async def publish_twist(self, vx: float, vy: float, metadata: Optional[Dict[str, Any]] = None) -> bool:
+        # Linear velocity (Vector3): x, y, z (float64 = double)
+        linear_x = struct.pack('<d', vx_val)  # '<' = little endian, 'd' = double
+        linear_y = struct.pack('<d', vy_val)
+        linear_z = struct.pack('<d', 0.0)
+        
+        # Angular velocity (Vector3): x, y, z (float64 = double)
+        angular_x = struct.pack('<d', 0.0)
+        angular_y = struct.pack('<d', 0.0)
+        angular_z = struct.pack('<d', 0.0)
+        
+        # Combine all
+        cdr_data = (cdr_header + 
+                   linear_x + linear_y + linear_z + 
+                   angular_x + angular_y + angular_z)
+        
+        logger.debug(f"CDR data created: {len(cdr_data)} bytes")
+        logger.debug(f"CDR hex: {cdr_data.hex()}")
+        
+        return cdr_data
+
+    async def publish_twist(self, vx: float, vy: float, 
+                           metadata: Optional[Dict[str, Any]] = None) -> bool:
         """Publish Twist message via Zenoh"""
         try:
-            # Ensure connection
-            if not await self.ensure_connected():
-                logger.error("Cannot publish: Zenoh connection unavailable")
+            # Check connection
+            if not self.is_connected or not self.session:
+                logger.error("Cannot publish: Not connected to Zenoh")
                 return False
             
-            # Create Twist message
-            twist = TwistMessage.from_velocity(vx, vy)
-            message_data = twist.to_json()
+            # Create CDR message
+            message_data = self._create_twist_cdr(vx, vy)
+            topic_key = self.config['cmd_vel_key']
             
-            # Add metadata if provided
-            if metadata:
-                message_dict = twist.to_dict()
-                message_dict["metadata"] = metadata
-                message_data = json.dumps(message_dict)
+            # Publish via Zenoh
+            logger.info(f"Publishing to Zenoh key: {topic_key}")
+            logger.debug(f"Message size: {len(message_data)} bytes")
+            logger.debug(f"Velocity: vx={vx}, vy={vy}")
             
-            # Publish message (mock if Zenoh not available)
-            if self.zenoh_available and self.session:
-                self.session.put(self.config['cmd_vel_key'], message_data)
-                logger.info(f"Published Twist message: vx={vx}, vy={vy} to key={self.config['cmd_vel_key']}")
-            else:
-                logger.info(f"Mock published Twist message: vx={vx}, vy={vy} (Zenoh not available)")
+            # Use put() to publish
+            self.session.put(topic_key, message_data)
             
-            # Update statistics
+            # Update stats
             self.last_publish_time = datetime.utcnow()
             self.publish_count += 1
             
-            logger.debug(f"Message data: {message_data}")
+            logger.info(f"✅ Published Twist #{self.publish_count} to {topic_key}")
             
             return True
             
         except Exception as e:
-            logger.error(f"Failed to publish Twist message: {e}")
-            self.is_connected = False  # Mark as disconnected for next attempt
+            logger.error(f"Failed to publish Twist: {e}", exc_info=True)
+            self.is_connected = False
             return False
     
     async def publish_velocity_command(self, vx: float, vy: float, 
                                      levels: Optional[Dict[str, int]] = None,
                                      source: str = "fleet") -> bool:
-        """Publish velocity command with additional metadata"""
+        """Publish velocity command with metadata"""
         metadata = {
             "timestamp": datetime.utcnow().isoformat(),
             "source": source,
@@ -217,14 +228,13 @@ class ZenohPublisher:
         return await self.publish_twist(vx, vy, metadata)
     
     def get_status(self) -> Dict[str, Any]:
-        """Get publisher status information"""
+        """Get publisher status"""
         return {
             "connected": self.is_connected,
             "zenoh_available": self.zenoh_available,
             "locator": self.config['locator'],
             "cmd_vel_key": self.config['cmd_vel_key'],
             "reconnect_attempts": self.reconnect_attempts,
-            "max_reconnect_attempts": self.config['max_reconnect_attempts'],
             "last_publish_time": self.last_publish_time.isoformat() if self.last_publish_time else None,
             "publish_count": self.publish_count,
             "session_active": self.session is not None,
@@ -232,149 +242,66 @@ class ZenohPublisher:
         }
     
     async def health_check(self) -> bool:
-        """Perform health check by attempting a test publish"""
-        try:
-            if not self.is_connected:
-                return False
-            
-            # Try to publish a zero velocity command as health check
-            return await self.publish_twist(0.0, 0.0, {"health_check": True})
-            
-        except Exception as e:
-            logger.error(f"Health check failed: {e}")
-            return False
-
-
-class ZenohMonitor:
-    """Monitor Zenoh connection health"""
-    
-    def __init__(self, publisher: ZenohPublisher, check_interval: float = None):
-        self.publisher = publisher
-        self.check_interval = check_interval or settings.HEALTH_CHECK_INTERVAL
-        self.monitoring = False
-        self.monitor_task: Optional[asyncio.Task] = None
-    
-    async def start_monitoring(self):
-        """Start connection monitoring"""
-        if self.monitoring:
-            return
-        
-        self.monitoring = True
-        self.monitor_task = asyncio.create_task(self._monitor_loop())
-        logger.info(f"Started Zenoh connection monitoring (interval: {self.check_interval}s)")
-    
-    async def stop_monitoring(self):
-        """Stop connection monitoring"""
-        self.monitoring = False
-        if self.monitor_task:
-            self.monitor_task.cancel()
-            try:
-                await self.monitor_task
-            except asyncio.CancelledError:
-                pass
-        logger.info("Stopped Zenoh connection monitoring")
-    
-    async def _monitor_loop(self):
-        """Connection monitoring loop"""
-        while self.monitoring:
-            try:
-                # Perform health check
-                healthy = await self.publisher.health_check()
-                
-                if not healthy and self.publisher.is_connected:
-                    logger.warning("Zenoh health check failed, marking as disconnected")
-                    self.publisher.is_connected = False
-                
-                await asyncio.sleep(self.check_interval)
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error in Zenoh monitoring: {e}")
-                await asyncio.sleep(self.check_interval)
+        """Health check"""
+        return self.is_connected and self.session is not None
 
 
 class ZenohService:
-    """Zenoh service for centralized Zenoh operations"""
+    """Zenoh service for centralized operations"""
     
     def __init__(self):
         self.publisher: Optional[ZenohPublisher] = None
-        self.monitor: Optional[ZenohMonitor] = None
         logger.info("Zenoh service initialized")
     
     async def initialize(self) -> bool:
-        """Initialize Zenoh publisher and monitoring"""
+        """Initialize publisher"""
         try:
             self.publisher = ZenohPublisher()
             connected = await self.publisher.connect()
             
             if connected:
-                self.monitor = ZenohMonitor(self.publisher)
-                await self.monitor.start_monitoring()
-                logger.info("Zenoh service initialization complete")
+                logger.info("✅ Zenoh service ready")
                 return True
             else:
-                logger.warning("Zenoh service initialization failed - connection unavailable")
+                logger.error("❌ Zenoh service initialization failed")
                 return False
                 
         except Exception as e:
-            logger.error(f"Failed to initialize Zenoh service: {e}")
+            logger.error(f"Failed to initialize Zenoh: {e}", exc_info=True)
             return False
     
     async def shutdown(self):
-        """Shutdown Zenoh service"""
+        """Shutdown service"""
         try:
-            if self.monitor:
-                await self.monitor.stop_monitoring()
-                self.monitor = None
-            
             if self.publisher:
                 await self.publisher.disconnect()
                 self.publisher = None
-            
             logger.info("Zenoh service shutdown complete")
-            
         except Exception as e:
-            logger.error(f"Error during Zenoh service shutdown: {e}")
+            logger.error(f"Error during shutdown: {e}")
     
     async def publish_velocity(self, vx: float, vy: float, 
                               levels: Optional[Dict[str, int]] = None,
                               source: str = "fleet") -> bool:
         """Publish velocity command"""
         if not self.publisher:
-            logger.error("Zenoh publisher not initialized")
+            logger.error("Publisher not initialized")
             return False
         
         return await self.publisher.publish_velocity_command(vx, vy, levels, source)
     
     def get_status(self) -> Dict[str, Any]:
-        """Get Zenoh service status"""
+        """Get service status"""
         if self.publisher:
             return self.publisher.get_status()
-        else:
-            return {
-                "connected": False,
-                "error": "Publisher not initialized"
-            }
+        return {"connected": False, "error": "Not initialized"}
     
     async def health_check(self) -> bool:
-        """Perform health check"""
+        """Health check"""
         if self.publisher:
             return await self.publisher.health_check()
         return False
-    
-    @asynccontextmanager
-    async def session(self):
-        """Context manager for Zenoh operations"""
-        if not self.publisher:
-            raise ZenohConnectionError("Zenoh publisher not initialized")
-        
-        try:
-            yield self.publisher
-        finally:
-            # Keep connection alive for reuse
-            pass
 
 
-# Global Zenoh service instance
+# Global instance
 zenoh_service = ZenohService()

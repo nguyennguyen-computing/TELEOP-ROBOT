@@ -1,8 +1,3 @@
-/**
- * Fleet Client Integration Tests
- * Requirements: 4.1, 7.3 - Fleet server communication and API contracts
- */
-
 import axios from 'axios';
 import { FleetClient, CircuitBreakerState } from '../fleetClient';
 import { VelocityCommand } from '@web-teleop-robot/shared';
@@ -101,7 +96,7 @@ describe('FleetClient', () => {
       // Assert
       expect(result).toEqual(expectedResponse);
       expect(mockAxiosInstance.post).toHaveBeenCalledWith(
-        '/fleet/vel',
+        '/api/v1/fleet/vel',
         {
           vx: testCommand.vx,
           vy: testCommand.vy,

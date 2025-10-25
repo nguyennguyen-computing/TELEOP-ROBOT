@@ -15,7 +15,7 @@ process.env.CORS_ORIGIN = 'http://localhost:3000';
 process.env.VX_MAX = '1.0';
 process.env.VY_MAX = '1.0';
 process.env.ZENOH_LOCATOR = 'tcp/localhost:7447';
-process.env.Z_KEY_CMD_VEL = 'rt/ros2/cmd_vel';
+process.env.Z_KEY_CMD_VEL = 'cmd_vel';
 
 // Suppress console logs during testing unless explicitly needed
 if (process.env.VERBOSE_TESTS !== 'true') {

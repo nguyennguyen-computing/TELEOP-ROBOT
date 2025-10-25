@@ -47,8 +47,8 @@ class Settings(BaseSettings):
     CORS_ALLOW_HEADERS: List[str] = Field(default=["*"], env="CORS_ALLOW_HEADERS")
     
     # Zenoh configuration
-    ZENOH_LOCATOR: str = Field(default="tcp/zenoh:7447", env="ZENOH_LOCATOR")
-    Z_KEY_CMD_VEL: str = Field(default="rt/ros2/cmd_vel", env="Z_KEY_CMD_VEL")
+    ZENOH_LOCATOR: str = Field(default="tcp/localhost:7447", env="ZENOH_LOCATOR")
+    Z_KEY_CMD_VEL: str = Field(default="cmd_vel", env="Z_KEY_CMD_VEL")
     ZENOH_CONNECT_TIMEOUT: float = Field(default=10.0, env="ZENOH_CONNECT_TIMEOUT")
     ZENOH_RECONNECT_INTERVAL: float = Field(default=5.0, env="ZENOH_RECONNECT_INTERVAL")
     ZENOH_MAX_RECONNECT_ATTEMPTS: int = Field(default=5, env="ZENOH_MAX_RECONNECT_ATTEMPTS")

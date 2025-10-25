@@ -1,8 +1,3 @@
-/**
- * Integration tests for API routes
- * Requirements: 7.1, 7.2, 3.4, 7.5
- */
-
 import request from 'supertest';
 import { Express } from 'express';
 import { MongoMemoryServer } from 'mongodb-memory-server';

@@ -1,10 +1,3 @@
-/**
- * Unit tests for VelocityProcessor
- * 
- * Tests all velocity calculation logic, validation, and coordinate system mapping
- * according to requirements 5.1-5.7
- */
-
 import { VelocityProcessor, VelocityUtils } from '../velocityProcessor';
 import type { SpeedLevels, VelocityCommand } from '@web-teleop-robot/shared';
 
@@ -18,7 +11,7 @@ jest.mock('../../config/environment', () => ({
     MONGO_URI: 'mongodb://localhost:27017/test',
     CORS_ORIGIN: 'http://localhost:3000',
     ZENOH_LOCATOR: 'tcp/localhost:7447',
-    Z_KEY_CMD_VEL: 'rt/ros2/cmd_vel',
+    Z_KEY_CMD_VEL: 'cmd_vel',
     ROS_DOMAIN_ID: 0
   })
 }));
@@ -31,7 +24,6 @@ describe('VelocityProcessor', () => {
   });
 
   describe('Coordinate System Mapping', () => {
-    // Requirement 5.1: Forward = +X, Backward = -X
     test('should map forward movement to positive X velocity', () => {
       const levels: SpeedLevels = { up: 5, down: 0, left: 0, right: 0 };
       const { vx, vy } = processor.calculateVelocity(levels);
@@ -50,7 +42,6 @@ describe('VelocityProcessor', () => {
       expect(vx).toBe(-3 * 0.1); // -3 levels * (1.0 / 10)
     });
 
-    // Requirement 5.2: Right = +Y, Left = -Y
     test('should map right movement to positive Y velocity', () => {
       const levels: SpeedLevels = { up: 0, down: 0, left: 0, right: 7 };
       const { vx, vy } = processor.calculateVelocity(levels);
@@ -71,7 +62,7 @@ describe('VelocityProcessor', () => {
   });
 
   describe('Net Level Calculations', () => {
-    // Requirement 5.3: net_x_level = up - down
+    // net_x_level = up - down
     test('should calculate net X level correctly', () => {
       const levels: SpeedLevels = { up: 8, down: 3, left: 0, right: 0 };
       const { vx } = processor.calculateVelocity(levels);
@@ -81,7 +72,7 @@ describe('VelocityProcessor', () => {
       expect(vx).toBe(expectedVx);
     });
 
-    // Requirement 5.4: net_y_level = right - left
+    // net_y_level = right - left
     test('should calculate net Y level correctly', () => {
       const levels: SpeedLevels = { up: 0, down: 0, left: 2, right: 9 };
       const { vy } = processor.calculateVelocity(levels);
@@ -101,7 +92,7 @@ describe('VelocityProcessor', () => {
   });
 
   describe('Velocity Clamping and Scaling', () => {
-    // Requirement 5.5: vel_x = clamp(net_x_level, -10, 10) × STEP_X
+    // vel_x = clamp(net_x_level, -10, 10) × STEP_X
     test('should clamp X velocity to maximum range', () => {
       // Test levels that would exceed maximum
       const levels: SpeedLevels = { up: 10, down: 0, left: 0, right: 0 };
@@ -117,7 +108,7 @@ describe('VelocityProcessor', () => {
       expect(vx).toBe(-1.0); // -10 * 0.1 = -1.0 (-VX_MAX)
     });
 
-    // Requirement 5.6: vel_y = clamp(net_y_level, -10, 10) × STEP_Y
+    // vel_y = clamp(net_y_level, -10, 10) × STEP_Y
     test('should clamp Y velocity to maximum range', () => {
       const levels: SpeedLevels = { up: 0, down: 0, left: 0, right: 10 };
       const { vy } = processor.calculateVelocity(levels);
@@ -277,7 +268,7 @@ describe('VelocityProcessor', () => {
   });
 
   describe('ROS2 Twist Message Conversion', () => {
-    // Requirement 5.7: linear.x = vel_x, linear.y = vel_y, angular.z = 0
+    // linear.x = vel_x, linear.y = vel_y, angular.z = 0
     test('should convert to correct Twist message format', () => {
       const command: VelocityCommand = {
         vx: 0.5,

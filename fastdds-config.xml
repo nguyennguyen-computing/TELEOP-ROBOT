@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+    <participant profile_name="localhost_only_participant" is_default_profile="true">
+        <rtps>
+            <builtin>
+                <discovery_config>
+                    <discoveryProtocol>SIMPLE</discoveryProtocol>
+                </discovery_config>
+                <avoid_builtin_multicast>true</avoid_builtin_multicast>
+            </builtin>
+            <useBuiltinTransports>true</useBuiltinTransports>
+        </rtps>
+    </participant>
+</profiles>

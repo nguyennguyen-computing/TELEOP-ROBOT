@@ -1,10 +1,3 @@
-/**
- * Velocity Command Processing Service
- * 
- * Implements velocity calculation logic, validation, and coordinate system mapping
- * according to requirements 5.1-5.7
- */
-
 import type { VelocityCommand, SpeedLevels, ValidationResult } from '@web-teleop-robot/shared';
 import { getEnvironmentConfig } from '../config/environment';
 
@@ -25,10 +18,6 @@ export class VelocityProcessor {
     this.stepY = this.vyMax / 10; // STEP_Y = VY_MAX / 10
   }
 
-  /**
-   * Calculates net levels from individual direction levels
-   * Requirements 5.3, 5.4: net_x_level = up - down, net_y_level = right - left
-   */
   private calculateNetLevels(levels: SpeedLevels): { netX: number; netY: number } {
     const netX = levels.up - levels.down;     // Forward(+) - Backward(-)
     const netY = levels.right - levels.left;  // Right(+) - Left(-)
@@ -43,11 +32,6 @@ export class VelocityProcessor {
     return Math.min(Math.max(value, min), max);
   }
 
-  /**
-   * Converts speed levels to velocity values using coordinate system mapping
-   * Requirements 5.1, 5.2: Forward=+X, Backward=-X, Right=+Y, Left=-Y
-   * Requirements 5.5, 5.6: vel_x = clamp(net_x_level, -10, 10) × STEP_X
-   */
   public calculateVelocity(levels: SpeedLevels): { vx: number; vy: number } {
     // Calculate net levels
     const { netX, netY } = this.calculateNetLevels(levels);
@@ -175,10 +159,6 @@ export class VelocityProcessor {
     };
   }
 
-  /**
-   * Converts velocity command to ROS2 Twist message format
-   * Requirement 5.7: linear.x = vel_x, linear.y = vel_y, angular.z = 0
-   */
   public toTwistMessage(command: VelocityCommand) {
     return {
       linear: {
@@ -208,19 +188,25 @@ export class VelocityProcessor {
 }
 
 /**
- * Singleton instance of the velocity processor (lazy loaded)
+ * Singleton instance of the velocity processor
  */
 let _velocityProcessor: VelocityProcessor | null = null;
 
-export function getVelocityProcessor(): VelocityProcessor {
-  if (!_velocityProcessor) {
-    _velocityProcessor = new VelocityProcessor();
-  }
-  return _velocityProcessor;
-}
-
-// Export the getter function instead of the instance
-export { getVelocityProcessor as velocityProcessor };
+export const velocityProcessor = {
+  get instance(): VelocityProcessor {
+    if (!_velocityProcessor) {
+      _velocityProcessor = new VelocityProcessor();
+    }
+    return _velocityProcessor;
+  },
+  
+  // Delegate methods to the instance
+  validateCommand: (command: any) => velocityProcessor.instance.validateCommand(command),
+  calculateVelocity: (levels: any) => velocityProcessor.instance.calculateVelocity(levels),
+  createCommand: (levels: any, source?: string) => velocityProcessor.instance.createCommand(levels, source),
+  toTwistMessage: (command: any) => velocityProcessor.instance.toTwistMessage(command),
+  getVelocityLimits: () => velocityProcessor.instance.getVelocityLimits(),
+};
 
 /**
  * Utility functions for common velocity operations
