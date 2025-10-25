@@ -64,6 +64,10 @@ FLEET_PORT=8000
 VX_MAX=2.0
 VY_MAX=2.0
 
+# Safety Features
+DEADMAN_SWITCH_ENABLED=true
+DEADMAN_SWITCH_TIMEOUT_MS=5000
+
 # Authentication
 AUTH_ENABLED=true
 API_KEYS=test-api-key-123,admin-key-456
@@ -109,6 +113,75 @@ POST /api/vel
 - `GET /api/health` - API health
 - `GET /status` - Fleet server status (port 8000)
 
+## 🛡️ Safety Features
+
+### Deadman Switch
+Automatic safety system that stops the robot when connection is lost.
+
+**How it works:**
+- **Connection Loss**: Automatically sends `{vx: 0, vy: 0}` when WebSocket disconnects
+- **Timeout Protection**: Stops robot if no activity for 5 seconds (configurable)
+- **Error Handling**: Triggers on connection errors or network issues
+- **UI Reset**: Frontend automatically resets to stopped state
+
+**Configuration:**
+```bash
+DEADMAN_SWITCH_ENABLED=true
+DEADMAN_SWITCH_TIMEOUT_MS=5000  # 5 seconds timeout
+```
+
+**Testing Deadman Switch:**
+```bash
+# 1. Start system and move robot
+./docker-cleanup-and-run.sh
+# Open http://localhost:3000 and press movement buttons
+
+# 2. Test disconnect (choose one method):
+# - Close browser tab
+# - Disconnect network
+# - Run: docker pause teleop-robot-web-1
+
+# 3. Check logs for safety activation
+docker-compose logs -f node-api | grep deadman
+docker-compose logs -f robot | grep "velocity_x=0.0"
+```
+
+**Expected behavior:**
+- ✅ Robot immediately stops (`velocity_x=0.0, velocity_y=0.0`)
+- ✅ Backend logs show `deadman_switch_activated`
+- ✅ Frontend shows "🛑 Robot stopped for safety"
+- ✅ Database logs command with `source: deadman_switch`
+
+## 🧪 Testing
+
+### Manual Testing
+```bash
+# Test robot movement
+curl -X POST http://localhost:3001/api/vel \
+  -H "Authorization: ApiKey test-api-key-123" \
+  -H "Content-Type: application/json" \
+  -d '{"vx":0.5,"vy":0.2,"levels":{"up":5,"down":0,"left":0,"right":2}}'
+
+# Test stop command
+curl -X POST http://localhost:3001/api/vel \
+  -H "Authorization: ApiKey test-api-key-123" \
+  -H "Content-Type: application/json" \
+  -d '{"vx":0,"vy":0,"levels":{"up":0,"down":0,"left":0,"right":0}}'
+
+# Check logs
+curl http://localhost:3001/api/logs?limit=10
+```
+
+### Automated Testing
+```bash
+# Run deadman switch tests
+node test-deadman-switch.js
+
+# Check all services health
+curl http://localhost:3001/health
+curl http://localhost:8000/status
+```
+
 ## 🐛 Troubleshooting
 
 ### Common Issues
@@ -134,6 +207,43 @@ docker system prune -a
 - **Backend API**: http://localhost:3001/health
 - **Fleet API**: http://localhost:8000/status
 - **MongoDB**: localhost:27017
+
+### Specific Issues
+
+**Deadman switch not working:**
+```bash
+# Check if enabled
+grep DEADMAN_SWITCH .env
+
+# Test manually
+# 1. Move robot via web interface
+# 2. Close browser tab  
+# 3. Check logs: docker-compose logs node-api | grep deadman
+# 4. Verify robot stopped: docker-compose logs robot | tail -5
+```
+
+**Robot not receiving commands:**
+```bash
+# Check service chain
+docker-compose logs web | grep velocity     # Frontend
+docker-compose logs node-api | grep vel     # Backend
+docker-compose logs fleet-api | grep vel    # Fleet
+docker-compose logs robot | grep velocity   # Robot
+
+# Check Zenoh connection
+docker-compose logs zenoh
+docker-compose logs bridge
+```
+
+**Authentication errors:**
+```bash
+# Check API keys match across services
+grep API_KEYS .env
+
+# Test with curl
+curl -H "Authorization: ApiKey test-api-key-123" \
+     http://localhost:3001/api/health
+```
 
 ## 🛠️ Development
 

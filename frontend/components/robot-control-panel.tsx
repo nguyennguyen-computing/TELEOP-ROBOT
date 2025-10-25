@@ -314,15 +314,24 @@ export function RobotControlPanel() {
           : "Connected to robot successfully (WebSocket)";
         addNotificationRef.current("success", message);
       } else if (data.status === "disconnected") {
+        // DEADMAN SWITCH: Reset robot state to stopped when disconnected
+        setRobotState((prev) => ({
+          ...prev,
+          connectionStatus: "disconnected",
+          levels: { up: 0, down: 0, left: 0, right: 0 },
+          velocity: { vx: 0, vy: 0 },
+          isHolding: {}
+        }));
+        
         if (data.finalAttempt) {
           addNotificationRef.current(
             "error",
-            "Connection lost - max reconnection attempts reached"
+            "Connection lost - Robot stopped for safety. Max reconnection attempts reached."
           );
         } else if (!data.wasManual) {
           addNotificationRef.current(
             "warning",
-            "WebSocket connection lost - attempting to reconnect..."
+            "Connection lost - Robot stopped for safety. Attempting to reconnect..."
           );
         }
       } else if (data.status === "connecting" && data.reconnectAttempt) {

@@ -10,7 +10,7 @@ import {
 import { logEvent } from '../middleware/requestLogger';
 import { velocityProcessor } from '../services/velocityProcessor';
 import { createDatabaseService } from '../database/models';
-import { FleetVelocityResponse } from '../services';
+import { FleetVelocityResponse, FleetClient } from '../services';
 import { authService } from '../middleware/auth';
 
 // Store active WebSocket connections with metadata
@@ -163,6 +163,10 @@ export function setupWebSocket(wss: WebSocketServer): void {
     ws.on('message', (data: Buffer) => {
       try {
         const message: WebSocketMessage = JSON.parse(data.toString());
+
+        // Reset deadman switch timeout on any message activity
+        resetDeadmanTimeout(connectionId, clientIp);
+
         handleWebSocketMessage(ws, message, connection);
       } catch (error) {
         logEvent('websocket_message_error', {
@@ -183,8 +187,11 @@ export function setupWebSocket(wss: WebSocketServer): void {
     });
 
     // Handle connection close
-    ws.on('close', (code: number, reason: Buffer) => {
+    ws.on('close', async (code: number, reason: Buffer) => {
       activeConnections.delete(ws);
+
+      // Clear deadman switch timeout
+      clearDeadmanTimeout(connectionId);
 
       logEvent('websocket_disconnection', {
         connectionId,
@@ -194,12 +201,23 @@ export function setupWebSocket(wss: WebSocketServer): void {
         totalConnections: activeConnections.size,
       });
 
+      // DEADMAN SWITCH: Send stop command when client disconnects
+      try {
+        await sendDeadmanStopCommand(connectionId, clientIp);
+      } catch (error) {
+        logEvent('deadman_switch_error', {
+          connectionId,
+          clientIp,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        }, 'error');
+      }
+
       // Broadcast updated connection status
       broadcastConnectionStatus();
     });
 
     // Handle connection errors
-    ws.on('error', (error: Error) => {
+    ws.on('error', async (error: Error) => {
       logEvent('websocket_error', {
         error: error.message,
         connectionId,
@@ -207,8 +225,24 @@ export function setupWebSocket(wss: WebSocketServer): void {
       }, 'error');
 
       activeConnections.delete(ws);
+
+      // DEADMAN SWITCH: Send stop command on connection error
+      try {
+        await sendDeadmanStopCommand(connectionId, clientIp);
+      } catch (deadmanError) {
+        logEvent('deadman_switch_error', {
+          connectionId,
+          clientIp,
+          originalError: error.message,
+          deadmanError: deadmanError instanceof Error ? deadmanError.message : 'Unknown error'
+        }, 'error');
+      }
+
       broadcastConnectionStatus();
     });
+
+    // Setup deadman switch timeout for new connection
+    resetDeadmanTimeout(connectionId, clientIp);
 
     // Send initial connection confirmation
     const welcomeMessage: ConnectionStatusMessage = {
@@ -719,4 +753,146 @@ export function broadcastVelocityUpdate(velocityCommand: VelocityCommand): void 
   };
 
   broadcastMessage(velocityUpdate);
+}
+/**
+ * DEADMAN SWITCH: Sends stop command when client disconnects
+ * This is a critical safety feature that ensures robot stops when connection is lost
+ */
+async function sendDeadmanStopCommand(connectionId: string, clientIp: string): Promise<void> {
+  const stopCommand: VelocityCommand = {
+    vx: 0,
+    vy: 0,
+    levels: { up: 0, down: 0, left: 0, right: 0 },
+    timestamp: new Date()
+  };
+
+  logEvent('deadman_switch_activated', {
+    connectionId,
+    clientIp,
+    command: stopCommand,
+    reason: 'Client disconnected - sending emergency stop'
+  }, 'warn');
+
+  try {
+    // Send stop command to fleet server
+    const fleetClient = new FleetClient();
+    const fleetResponse = await fleetClient.sendVelocityCommand(stopCommand);
+
+    // Log to database
+    const dbService = await createDatabaseService();
+    const velocityLogModel = dbService.getVelocityLogModel();
+    await velocityLogModel.insertLog(
+      parseFloat(stopCommand.vx.toFixed(1)),
+      parseFloat(stopCommand.vy.toFixed(1)),
+      stopCommand.levels,
+      'deadman_switch'
+    );
+
+    // Broadcast stop command to remaining connected clients
+    const stopMessage: WebSocketMessage = {
+      type: 'velocity_update',
+      data: {
+        vx: 0,
+        vy: 0,
+        levels: { up: 0, down: 0, left: 0, right: 0 },
+        source: 'deadman_switch',
+        timestamp: new Date().toISOString()
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    broadcastMessage(stopMessage);
+
+    logEvent('deadman_switch_success', {
+      connectionId,
+      clientIp,
+      fleetResponse: fleetResponse ? 'success' : 'failed',
+      broadcastToClients: activeConnections.size
+    });
+
+  } catch (error) {
+    logEvent('deadman_switch_failed', {
+      connectionId,
+      clientIp,
+      error: error instanceof Error ? error.message : 'Unknown error',
+      command: stopCommand
+    }, 'error');
+
+    // Even if fleet communication fails, still broadcast stop to other clients
+    const emergencyStopMessage: WebSocketMessage = {
+      type: 'velocity_update',
+      data: {
+        vx: 0,
+        vy: 0,
+        levels: { up: 0, down: 0, left: 0, right: 0 },
+        source: 'deadman_switch_emergency',
+        timestamp: new Date().toISOString()
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    broadcastMessage(emergencyStopMessage);
+    throw error; // Re-throw to be caught by caller
+  }
+}
+/**
+ * Connection timeout tracking for deadman switch
+ */
+const connectionTimeouts = new Map<string, NodeJS.Timeout>();
+
+/**
+ * Sets up deadman switch timeout for a connection
+ */
+function setupDeadmanTimeout(connectionId: string, clientIp: string): void {
+  const timeoutMs = parseInt(process.env.DEADMAN_SWITCH_TIMEOUT_MS || '5000', 10);
+
+  // Clear existing timeout
+  const existingTimeout = connectionTimeouts.get(connectionId);
+  if (existingTimeout) {
+    clearTimeout(existingTimeout);
+  }
+
+  // Set new timeout
+  const timeout = setTimeout(async () => {
+    logEvent('deadman_switch_timeout', {
+      connectionId,
+      clientIp,
+      timeoutMs,
+      reason: 'No heartbeat received within timeout period'
+    }, 'warn');
+
+    try {
+      await sendDeadmanStopCommand(connectionId, clientIp);
+    } catch (error) {
+      logEvent('deadman_switch_timeout_error', {
+        connectionId,
+        clientIp,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      }, 'error');
+    }
+
+    connectionTimeouts.delete(connectionId);
+  }, timeoutMs);
+
+  connectionTimeouts.set(connectionId, timeout);
+}
+
+/**
+ * Resets deadman switch timeout (call on heartbeat/activity)
+ */
+function resetDeadmanTimeout(connectionId: string, clientIp: string): void {
+  if (process.env.DEADMAN_SWITCH_ENABLED === 'true') {
+    setupDeadmanTimeout(connectionId, clientIp);
+  }
+}
+
+/**
+ * Clears deadman switch timeout for a connection
+ */
+function clearDeadmanTimeout(connectionId: string): void {
+  const timeout = connectionTimeouts.get(connectionId);
+  if (timeout) {
+    clearTimeout(timeout);
+    connectionTimeouts.delete(connectionId);
+  }
 }
