@@ -1,174 +1,187 @@
-# Teleop Robot Backend API
+# Web Teleop Robot System
+
+A web-based teleoperation system for robots using Next.js, Node.js, FastAPI, and Zenoh.
+
+## 🏗️ System Overview
+
+![System Overview](docs/system-overview.jpeg)
+
+**Services:**
+- **Frontend**: Web control interface (Next.js)
+- **Backend API**: REST API and WebSocket (Node.js)
+- **Fleet Server**: Robot communication (FastAPI + Zenoh)
+- **Robot**: Simulated robot for testing (ROS2)
+- **MongoDB**: Data persistence
+- **Zenoh Bridge**: ROS2 integration
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Node.js (v18+)
-- MongoDB
-- Docker (optional, for MongoDB)
+- Docker and Docker Compose
+- Git
 
-### Running the Services
-
-#### 1. Start MongoDB
+### Setup and Run
 ```bash
-# Using Docker (recommended)
-docker run -d --name teleop-mongo -p 27017:27017 -e MONGO_INITDB_DATABASE=teleop_db mongo:7
+# 1. Clone and setup
+git clone <repository-url>
+cd teleop-robot
+cp .env.example .env
+chmod +x docker-cleanup-and-run.sh
 
-# Or using local MongoDB installation
-mongod --dbpath /path/to/your/db
+# 2. Start all services (recommended)
+./docker-cleanup-and-run.sh
+
+# 3. Access the application
+# Web Interface: http://localhost:3000
+# Backend API: http://localhost:3001
 ```
 
-#### 2. Start Backend API
+### Alternative Commands
 ```bash
-cd backend
-npm install
-npm run build
+# Manual start (all services)
+docker-compose up -d --build
 
-# Set environment variables and start
-NODE_PORT=3001 \
-FLEET_API_URL=http://localhost:8000 \
-MONGO_URI=mongodb://localhost:27017/teleop_db \
-CORS_ORIGIN=http://localhost:3000 \
-VX_MAX=1.0 \
-VY_MAX=1.0 \
-ZENOH_LOCATOR=tcp/localhost:7447 \
-Z_KEY_CMD_VEL=rt/ros2/cmd_vel \
-JWT_SECRET=your-secret-key-here \
-AUTH_ENABLED=true \
-API_KEYS=test-api-key-123 \
-npm start
+# Start with robot simulation
+docker-compose --profile robot up -d --build
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
 ```
 
-### Development Mode
+## ⚙️ Configuration
+
+Key environment variables in `.env`:
 ```bash
-npm run dev
+# Ports
+WEB_PORT=3000
+NODE_PORT=3001
+FLEET_PORT=8000
+
+# Robot Control
+VX_MAX=2.0
+VY_MAX=2.0
+
+# Authentication
+AUTH_ENABLED=true
+API_KEYS=test-api-key-123,admin-key-456
+JWT_SECRET=your-secret-key-here
 ```
 
 ## 📡 API Endpoints
 
-### Base URL
-```
-http://localhost:3001
-```
-
 ### Authentication
-All API endpoints (except health checks) require authentication using either:
-- **API Key**: `Authorization: ApiKey <your-api-key>`
-- **JWT Token**: `Authorization: Bearer <jwt-token>`
+```bash
+# Get JWT token
+POST /api/auth/token
+{
+  "userId": "test-user",
+  "scopes": ["robot:control"]
+}
 
-### Available Endpoints
+# Use API key
+Authorization: ApiKey test-api-key-123
 
-#### Health Checks
-- `GET /health` - Basic health check
-- `GET /api/health` - API health check
-
-#### Authentication
-- `POST /api/auth/token` - Get JWT token
-  ```json
-  {
-    "userId": "test-user",
-    "scopes": ["robot:read", "robot:control"]
-  }
-  ```
-- `GET /api/auth/verify` - Verify JWT token
-
-#### Robot Control
-- `POST /api/vel` - Send velocity command
-  ```json
-  {
-    "vx": 0.1,
-    "vy": 0.1,
-    "levels": {
-      "up": 1,
-      "down": 0,
-      "left": 0,
-      "right": 1
-    }
-  }
-  ```
-
-#### Monitoring
-- `GET /api/websocket/stats` - WebSocket connection statistics
-- `GET /api/fleet/stats` - Fleet service statistics
-- `GET /api/fleet/health` - Fleet service health
-- `GET /api/logs` - Velocity command logs
-
-## 🧪 Testing with Postman
-
-1. Import the `postman-collection.json` file into Postman
-2. Set the `token` variable with a JWT token from the auth endpoint
-3. Run the requests in order:
-   - Get Auth Token
-   - Verify Token
-   - Send Velocity Command
-   - Get Logs
-
-## 🔧 Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `NODE_PORT` | Backend API port | 3001 |
-| `MONGO_URI` | MongoDB connection string | mongodb://localhost:27017/teleop_db |
-| `FLEET_API_URL` | Fleet service URL | http://localhost:8000 |
-| `CORS_ORIGIN` | CORS allowed origin | http://localhost:3000 |
-| `VX_MAX` | Maximum X velocity | 1.0 |
-| `VY_MAX` | Maximum Y velocity | 1.0 |
-| `JWT_SECRET` | JWT signing secret | (required) |
-| `AUTH_ENABLED` | Enable authentication | true |
-| `API_KEYS` | Comma-separated API keys | (required) |
-
-## 📊 Velocity Calculation
-
-The API validates velocity commands by calculating expected values from speed levels:
-
-```
-netX = up - down
-netY = right - left
-vx = clamp(netX, -10, 10) × 0.1
-vy = clamp(netY, -10, 10) × 0.1
+# Use JWT token
+Authorization: Bearer <jwt-token>
 ```
 
-Where:
-- `up`, `down`, `left`, `right` are speed levels (0-10)
-- `vx`, `vy` are velocity values (-1.0 to 1.0)
+### Robot Control
+```bash
+# Send velocity command
+POST /api/vel
+{
+  "vx": 0.2,
+  "vy": 0.1,
+  "levels": {
+    "up": 2,
+    "down": 0,
+    "left": 0,
+    "right": 1
+  }
+}
+```
+
+### Health Checks
+- `GET /health` - Backend health
+- `GET /api/health` - API health
+- `GET /status` - Fleet server status (port 8000)
 
 ## 🐛 Troubleshooting
 
 ### Common Issues
+```bash
+# Port conflicts
+./docker-cleanup-and-run.sh
 
-1. **"Authentication required" error**
-   - Ensure API key is sent with `Authorization: ApiKey <key>` header
-   - Check that `API_KEYS` environment variable is set
+# Rebuild after config changes
+docker-compose build --no-cache
+docker-compose up -d
 
-2. **"JWT_SECRET not configured" error**
-   - Set `JWT_SECRET` environment variable
+# Check service status
+docker-compose ps
+docker-compose logs -f <service-name>
 
-3. **"Validation failed" error for velocity commands**
-   - Ensure `vx` and `vy` values match calculated values from levels
-   - Use the velocity calculation formula above
-
-4. **MongoDB connection issues**
-   - Verify MongoDB is running on port 27017
-   - Check `MONGO_URI` environment variable
-
-### Logs
-Backend logs are available in the console when running in development mode.
-
-## 🔗 Related Services
-
-- **Fleet Service**: Handles robot communication (port 8000)
-- **WebSocket Server**: Real-time communication (same port as API)
-- **MongoDB**: Data persistence (port 27017)
-
-## 📝 API Response Format
-
-All API responses follow this format:
-```json
-{
-  "ok": true|false,
-  "data": {...},
-  "error": "error message",
-  "timestamp": "2025-10-18T15:14:19.461Z"
-}
+# Clean everything
+docker-compose down -v
+docker system prune -a
 ```
 
+### Service URLs
+- **Web Interface**: http://localhost:3000
+- **Backend API**: http://localhost:3001/health
+- **Fleet API**: http://localhost:8000/status
+- **MongoDB**: localhost:27017
+
+## 🛠️ Development
+
+### Local Development
+```bash
+# Install dependencies
+npm install
+npm run install:all
+
+# Start in development mode
+npm run dev
+```
+
+### Docker Development
+```bash
+# Restart specific service
+docker-compose restart web
+
+# Rebuild specific service
+docker-compose build web --no-cache
+
+# Start with robot simulation
+docker-compose --profile robot up -d
+
+# Execute commands in container
+docker-compose exec web sh
+docker-compose exec node-api npm test
+docker-compose exec robot bash
+```
+
+## 📊 Monitoring
+
+```bash
+# View all logs
+docker-compose logs -f
+
+# View specific service logs
+docker-compose logs -f web
+docker-compose logs -f node-api
+
+# Check resource usage
+docker stats
+
+# Service health
+curl http://localhost:3001/health
+curl http://localhost:8000/heatlth
+```
+
+## 📄 License
+
+MIT License - see LICENSE file for details.
