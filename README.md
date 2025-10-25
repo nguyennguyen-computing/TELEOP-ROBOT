@@ -4,7 +4,7 @@ A web-based teleoperation system for robots using Next.js, Node.js, FastAPI, and
 
 ## 🏗️ System Overview
 
-![System Overview](docs/system-overview.jpeg)
+![System Overview](images/system-overview.jpeg)
 
 **Services:**
 - **Frontend**: Web control interface (Next.js)
